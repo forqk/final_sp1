@@ -5,6 +5,7 @@
 #include <unordered_map>
 
 namespace CryptoGuard {
+namespace po = boost::program_options;
 
 class ProgramOptions {
 public:
