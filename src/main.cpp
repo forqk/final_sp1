@@ -35,8 +35,6 @@ AesCipherParams CreateChiperParamsFromPassword(std::string_view password) {
 
 int main(int argc, char *argv[]) {
 
-    std::cout << "HELLO WORLD! " << std::endl;
-
     try {
         //
         // OpenSSL пример использования:
