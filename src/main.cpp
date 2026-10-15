@@ -34,7 +34,6 @@ AesCipherParams CreateChiperParamsFromPassword(std::string_view password) {
 }
 
 int main(int argc, char *argv[]) {
-
     try {
         //
         // OpenSSL пример использования:
@@ -83,12 +82,16 @@ int main(int argc, char *argv[]) {
 
         CryptoGuard::ProgramOptions options;
 
-        options.Parse(argc, argv);
+        if (!options.Parse(argc, argv)) {
+            return 0;
+        }
 
         CryptoGuard::CryptoGuardCtx cryptoCtx;
 
         using COMMAND_TYPE = CryptoGuard::ProgramOptions::COMMAND_TYPE;
+
         switch (options.GetCommand()) {
+
         case COMMAND_TYPE::ENCRYPT:
             std::print("File encoded successfully\n");
             break;

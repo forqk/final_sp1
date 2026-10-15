@@ -1,11 +1,13 @@
 #pragma once
 
 #include <boost/program_options.hpp>
+#include <filesystem>
 #include <string>
 #include <unordered_map>
 
 namespace CryptoGuard {
 namespace po = boost::program_options;
+namespace fs = std::filesystem;
 
 class ProgramOptions {
 public:
@@ -18,7 +20,7 @@ public:
         CHECKSUM,
     };
 
-    void Parse(int argc, char *argv[]);
+    bool Parse(int argc, char *argv[]);
 
     COMMAND_TYPE GetCommand() const { return command_; }
     std::string GetInputFile() const { return inputFile_; }
