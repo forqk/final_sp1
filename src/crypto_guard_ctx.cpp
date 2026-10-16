@@ -17,6 +17,8 @@ struct AesCipherParams {
 
 class CryptoGuardCtx::Impl {
 public:
+    Impl() { OpenSSL_add_all_algorithms(); }
+
     AesCipherParams CreateChiperParamsFromPassword(std::string_view password) {
         AesCipherParams params;
         constexpr std::array<unsigned char, 8> salt = {'1', '2', '3', '4', '5', '6', '7', '8'};
@@ -31,6 +33,8 @@ public:
 
         return params;
     }
+
+    ~Impl() { EVP_cleanup(); }
 
 public:
     void EncryptFile(std::iostream &inStream, std::iostream &outStream, std::string_view password) {}
