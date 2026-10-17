@@ -1,7 +1,11 @@
 #include "crypto_guard_ctx.h"
+#include <exception>
 #include <istream>
+#include <memory>
 #include <openssl/evp.h>
+#include <stdexcept>
 #include <string>
+#include <vector>
 
 namespace CryptoGuard {
 
@@ -36,10 +40,58 @@ public:
 
     ~Impl() { EVP_cleanup(); }
 
-public:
-    void EncryptFile(std::iostream &inStream, std::iostream &outStream, std::string_view password) {}
-    void DecryptFile(std::iostream &inStream, std::iostream &outStream, std::string_view password) {}
+    void EncryptFile(std::iostream &inStream, std::iostream &outStream, std::string_view password) {
+        ValidateStreams(inStream, outStream, password);
+
+        auto params = CreateChiperParamsFromPassword(password);
+        params.encrypt = 1;
+        EVP_CipherInit_ex(ctx_.get(), params.cipher, nullptr, params.key.data(), params.iv.data(), params.encrypt);
+
+        size_t buff_size = 16;
+        std::vector<unsigned char> outBuf(buff_size + EVP_MAX_BLOCK_LENGTH);
+        std::vector<unsigned char> inBuf(buff_size);
+        int outLen;
+
+        while (true) {
+            inStream.read(reinterpret_cast<char *>(inBuf.data()), inBuf.size());
+            auto bytesReaden = inStream.gcount();
+
+            if (bytesReaden == 0) {
+                break;
+            }
+
+            EVP_CipherUpdate(ctx_.get(), outBuf.data(), &outLen, inBuf.data(), static_cast<int>(bytesReaden));
+
+            outStream.write(reinterpret_cast<char *>(outBuf.data()), outLen);
+        }
+
+        EVP_CipherFinal_ex(ctx_.get(), outBuf.data(), &outLen);
+        outStream.write(reinterpret_cast<char *>(outBuf.data()), outLen);
+    }
+
+    void DecryptFile(std::iostream &inStream, std::iostream &outStream, std::string_view password) {
+        ValidateStreams(inStream, outStream, password);
+    }
+
     std::string CalculateChecksum(std::iostream &inStream) { return "NOT_IMPLEMENTED"; }
+
+private:
+    void ValidateStreams(const std::ios &inStream, const std::ios &outStream, std::string_view password) const {
+        if (!inStream) {
+            throw std::runtime_error("bad iStream");
+        }
+        if (!outStream) {
+            throw std::runtime_error("bad Ostream");
+        }
+        if (password.empty()) {
+            throw std::invalid_argument("passwd cannot be empty");
+        }
+    }
+
+    using UniquePtrCtx =
+        std::unique_ptr<EVP_CIPHER_CTX, decltype([](EVP_CIPHER_CTX *ctx) { EVP_CIPHER_CTX_free(ctx); })>;
+
+    UniquePtrCtx ctx_{EVP_CIPHER_CTX_new()};
 };
 
 CryptoGuardCtx::CryptoGuardCtx() : pImpl_(std::make_unique<Impl>()) {}
