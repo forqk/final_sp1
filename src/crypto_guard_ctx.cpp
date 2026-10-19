@@ -3,9 +3,16 @@
 #include <istream>
 #include <memory>
 #include <openssl/evp.h>
+#include <shared_mutex>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
+
+#include <iomanip>
+#include <sstream>
+
+#include <openssl/err.h>
 
 namespace CryptoGuard {
 
@@ -40,58 +47,121 @@ public:
 
     ~Impl() { EVP_cleanup(); }
 
-    void EncryptFile(std::iostream &inStream, std::iostream &outStream, std::string_view password) {
-        ValidateStreams(inStream, outStream, password);
-
-        auto params = CreateChiperParamsFromPassword(password);
-        params.encrypt = 1;
+    void CryptFunc(std::iostream &inStream, std::iostream &outStream, const AesCipherParams &params) {
         EVP_CipherInit_ex(ctx_.get(), params.cipher, nullptr, params.key.data(), params.iv.data(), params.encrypt);
 
-        size_t buff_size = 16;
-        std::vector<unsigned char> outBuf(buff_size + EVP_MAX_BLOCK_LENGTH);
-        std::vector<unsigned char> inBuf(buff_size);
+        std::vector<unsigned char> outBuf(buff_size_ + EVP_MAX_BLOCK_LENGTH);
+        std::vector<unsigned char> inBuf(buff_size_);
         int outLen;
 
         while (true) {
             inStream.read(reinterpret_cast<char *>(inBuf.data()), inBuf.size());
-            auto bytesReaden = inStream.gcount();
+            auto bytesRead = inStream.gcount();
 
-            if (bytesReaden == 0) {
+            if (bytesRead == 0) {
                 break;
             }
 
-            EVP_CipherUpdate(ctx_.get(), outBuf.data(), &outLen, inBuf.data(), static_cast<int>(bytesReaden));
+            if (!EVP_CipherUpdate(ctx_.get(), outBuf.data(), &outLen, inBuf.data(), static_cast<int>(bytesRead))) {
+                ThrowOpenSSLError("EVP_CipherUpdate failed");
+            }
 
             outStream.write(reinterpret_cast<char *>(outBuf.data()), outLen);
         }
 
-        EVP_CipherFinal_ex(ctx_.get(), outBuf.data(), &outLen);
+        if (!EVP_CipherFinal_ex(ctx_.get(), outBuf.data(), &outLen)) {
+            ThrowOpenSSLError("EVP_CipherFinal_ex failed");
+        }
         outStream.write(reinterpret_cast<char *>(outBuf.data()), outLen);
     }
 
-    void DecryptFile(std::iostream &inStream, std::iostream &outStream, std::string_view password) {
-        ValidateStreams(inStream, outStream, password);
+    void EncryptFile(std::iostream &inStream, std::iostream &outStream, std::string_view password) {
+        ValidateInput(inStream, outStream, password);
+        auto params = CreateChiperParamsFromPassword(password);
+        params.encrypt = 1;
+        CryptFunc(inStream, outStream, params);
     }
 
-    std::string CalculateChecksum(std::iostream &inStream) { return "NOT_IMPLEMENTED"; }
+    void DecryptFile(std::iostream &inStream, std::iostream &outStream, std::string_view password) {
+        ValidateInput(inStream, outStream, password);
+        auto params = CreateChiperParamsFromPassword(password);
+        params.encrypt = 0;
+        CryptFunc(inStream, outStream, params);
+    }
+
+    std::string CalculateChecksum(std::iostream &inStream) {
+        if (!inStream) {
+            throw std::runtime_error("bad iStream");
+        }
+
+        using UniquePtrmdCtx = std::unique_ptr<EVP_MD_CTX, decltype([](EVP_MD_CTX *mdCtx) { EVP_MD_CTX_free(mdCtx); })>;
+        UniquePtrmdCtx mdctx{EVP_MD_CTX_new()};
+
+        const EVP_MD *md = EVP_get_digestbyname("SHA256");
+
+        unsigned char md_value[EVP_MAX_MD_SIZE];
+        unsigned int md_len;
+
+        if (!EVP_DigestInit_ex2(mdctx.get(), md, NULL)) {
+            ThrowOpenSSLError("Message digest initialization failed.\n");
+        }
+
+        std::vector<unsigned char> inBuf(buff_size_);
+
+        while (true) {
+            inStream.read(reinterpret_cast<char *>(inBuf.data()), inBuf.size());
+            auto bytesRead = inStream.gcount();
+
+            if (bytesRead == 0) {
+                break;
+            }
+
+            if (!EVP_DigestUpdate(mdctx.get(), inBuf.data(), bytesRead)) {
+                ThrowOpenSSLError("Message digest update failed.\n");
+            }
+        }
+
+        if (!EVP_DigestFinal_ex(mdctx.get(), md_value, &md_len)) {
+            ThrowOpenSSLError("Message digest finalization failed.\n");
+        }
+
+        std::stringstream ss;
+
+        for (unsigned int i = 0; i < md_len; ++i) {
+            ss << std::hex << std::setw(2) << std::setfill('0') << static_cast<int>(md_value[i]);
+        }
+
+        return ss.str();
+    }
 
 private:
-    void ValidateStreams(const std::ios &inStream, const std::ios &outStream, std::string_view password) const {
+    void ValidateInput(std::iostream &inStream, std::iostream &outStream, std::string_view password) {
         if (!inStream) {
             throw std::runtime_error("bad iStream");
         }
         if (!outStream) {
-            throw std::runtime_error("bad Ostream");
+            throw std::runtime_error("bad oStream");
         }
         if (password.empty()) {
             throw std::invalid_argument("passwd cannot be empty");
         }
     }
 
+    void ThrowOpenSSLError(const std::string &message) {
+        unsigned long err = ERR_get_error();
+
+        char errorBuffer[256];
+        ERR_error_string_n(err, errorBuffer, sizeof(errorBuffer));
+
+        throw std::runtime_error(message + ": " + errorBuffer);
+    }
+
     using UniquePtrCtx =
         std::unique_ptr<EVP_CIPHER_CTX, decltype([](EVP_CIPHER_CTX *ctx) { EVP_CIPHER_CTX_free(ctx); })>;
 
     UniquePtrCtx ctx_{EVP_CIPHER_CTX_new()};
+
+    size_t buff_size_ = 16;
 };
 
 CryptoGuardCtx::CryptoGuardCtx() : pImpl_(std::make_unique<Impl>()) {}
